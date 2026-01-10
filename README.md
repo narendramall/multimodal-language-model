@@ -1,3 +1,3 @@
 # multimodal-language-model
 
-will write visual language model from scratch
+Coding a Multimodal (Vision) Language Model from scratch in PyTorch
