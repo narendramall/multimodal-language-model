@@ -133,8 +133,91 @@ class SiglipVisionEmbeddings(nn.Module):
         # [Batch_Size, Num_Patches, Embed_Dim]
         return embeddings
 
+class SiglipAttention(nn.Module):
+    def __init__(self, config: SiglipVisionConfig):
+        super().__init__()
+        self.config = config
+        self.embed_dim = config.hidden_size
+        self.num_heads = config.num_attention_heads
+        self.head_dim = self.embed_dim // self.num_heads
+        self.scale = self.head_dim ** -0.5
+        self.dropout = config.attention_dropout
+
+        self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.v_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
+
+    def forward(
+            self, hidden_states: torch.Tensor
+            ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        # hidden_states: [Batch_Size, Num_Patches, Embed_Dim]
+        batch_size, seq_len, _ = hidden_states.size()
+        # query_states: [Batch_Size, Num_Patches, Embed_Dim]
+        query_states = self.q_proj(hidden_states)
+
+        # key_states: [Batch_Size, Num_Patches, Embed_Dim]
+        key_states = self.k_proj(hidden_states)
+
+        # value_states: [Batch_Size, Num_Patches, Embed_Dim]
+        value_states = self.v_proj(hidden_states)
+
+        # size: [Batch_Size, Num_Heads, Seq_Len/Num_Patches, Head_Dim]
+        query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # calculate the attention using the formula Q * K^T / sqrt(head_dim)
+        # attn_weight: [Batch_Size, Num_Heads, Num_Patches, Num_Patches]
+        attn_weights = (torch.matmul(query_states, key_states.transpose(2, 3)) / self.scale) 
+
+        if attn_weights.size() != (batch_size, self.num_heads, seq_len, seq_len):
+            raise ValueError(
+                f"Attention weighs should be of size {(batch_size, self.num_heads, seq_len, seq_len)}, but is "
+                f" {attn_weights.size()}"
+            )
+        
+        # apply the softmax row-wise. attn_weights: [Batch_Size, Num_Heads, Num_Patches, Num_Patches]
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+
+        # apply dropout only during training
+        attn_weights = nn.functional.dropout(attn_weights, p = self.dropout, training = self.training)
+
+        # multiply the attention weight by the value states. 
+        # attn_output: 
+        # [Batch_Size, Num_Heads, Num_Patches, Head_Dim] -> [Batch_Size, Num_Patches, Num_Heads, Head_Dim]
+        # here contiguous allow to reshape with external momory use   
+        attn_outout = torch.matmul(attn_weights, value_states).transpose(1, 2).contiguous()
+
+        # [Batch_Size, Num_Patches, Num_Heads, Head_Dim] -> [Batch_Size, Num_Patches, Embed_Dim]
+        attn_outout = attn_outout.reshape(batch_size, seq_len, self.embed_dim)
+        # now we need to multiply the attention with Wo to mix all the independent head data with each other
+        # so far all the head are separately calculated and no mixing happened b/w them
+        
+        # [Batch_Size, Num_Patches, Embed_Dim] -> [Batch_Size, Num_Patches, Embed_Dim]
+        attn_outout = self.out_proj(attn_outout)
+        return attn_outout
+
+class SiglipEncoder(nn.Module):
+    def __init__(self, config: SiglipVisionConfig):
+        super().__init__()
+        self.config = config
+        self.layers = nn.ModuleList(
+            [SiglipEncoderLayer(config=self.config) for _ in range(config.num_hidden_layers)]
+        )
+
+    def forward(self, input_embeds: torch.Tensor) -> torch.Tensor:
+        # input_embeds: [Batch_Size, Num_Patches, Embed_Dim]
+        hidden_states = input_embeds
+
+        for encoder_layer in self.layers:
+            # [Batch_Size, Num_Patches, Embed_Dim]
+            hidden_states = encoder_layer(hidden_states)
+
+        return hidden_states
+
 class SiglipVisionTransformer(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config: SiglipVisionConfig):
         super().__init__()
         self.config = config
         embed_dim = config.hidden_size
