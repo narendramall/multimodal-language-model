@@ -186,7 +186,7 @@ class SiglipAttention(nn.Module):
         # multiply the attention weight by the value states. 
         # attn_output: 
         # [Batch_Size, Num_Heads, Num_Patches, Head_Dim] -> [Batch_Size, Num_Patches, Num_Heads, Head_Dim]
-        # here contiguous allow to reshape with external momory use   
+        # here contiguous allow to reshape without external momory use   
         attn_outout = torch.matmul(attn_weights, value_states).transpose(1, 2).contiguous()
 
         # [Batch_Size, Num_Patches, Num_Heads, Head_Dim] -> [Batch_Size, Num_Patches, Embed_Dim]
