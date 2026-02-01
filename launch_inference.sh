@@ -18,5 +18,3 @@ python inference.py \
     --top_p $TOP_P \
     --do_sample $DO_SAMPLE \
     --only_cpu $ONLY_CPU \
-
-# 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
